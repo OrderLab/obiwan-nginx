@@ -9,6 +9,7 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
+#include <orbit.h>
 
 typedef struct {
     u_char    *name;
@@ -1871,13 +1872,14 @@ ngx_http_output_filter(ngx_http_request_t *r, ngx_chain_t *in)
 }
 
 
-u_char *
-ngx_http_map_uri_to_path(ngx_http_request_t *r, ngx_str_t *path,
-    size_t *root_length, size_t reserved)
+static u_char *
+ngx_http_map_uri_to_path_real(ngx_http_request_t *r, ngx_str_t *path,
+    size_t *root_length, size_t reserved, bool orbit)
 {
     u_char                    *last;
     size_t                     alias;
     ngx_http_core_loc_conf_t  *clcf;
+    ngx_int_t                  rc;
 
     clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
 
@@ -1896,7 +1898,9 @@ ngx_http_map_uri_to_path(ngx_http_request_t *r, ngx_str_t *path,
 
         path->len = clcf->root.len + reserved + r->uri.len - alias + 1;
 
-        path->data = ngx_pnalloc(r->pool, path->len);
+        //path->data = orbit ? orbit_alloc(r->oballoc, path->len)
+        path->data = orbit ? calloc(path->len, 1)
+                           : ngx_pnalloc(r->pool, path->len);
         if (path->data == NULL) {
             return NULL;
         }
@@ -1904,6 +1908,9 @@ ngx_http_map_uri_to_path(ngx_http_request_t *r, ngx_str_t *path,
         last = ngx_copy(path->data, clcf->root.data, clcf->root.len);
 
     } else {
+        /* Not ported */
+        fprintf(stderr, "orbit: clcf->root_lengths != NULL\n");
+	abort();
 
         if (alias == NGX_MAX_SIZE_T_VALUE) {
             reserved += r->add_uri_to_alias ? r->uri.len + 1 : 1;
@@ -1919,9 +1926,10 @@ ngx_http_map_uri_to_path(ngx_http_request_t *r, ngx_str_t *path,
             return NULL;
         }
 
-        if (ngx_get_full_name(r->pool, (ngx_str_t *) &ngx_cycle->prefix, path)
-            != NGX_OK)
-        {
+        rc = orbit ? ngx_get_full_name_orbit(r->oballoc, (ngx_str_t *) &ngx_cycle->prefix, path)
+                   : ngx_get_full_name(r->pool, (ngx_str_t *) &ngx_cycle->prefix, path);
+
+        if (rc != NGX_OK) {
             return NULL;
         }
 
@@ -1944,6 +1952,19 @@ ngx_http_map_uri_to_path(ngx_http_request_t *r, ngx_str_t *path,
     return last;
 }
 
+u_char *
+ngx_http_map_uri_to_path(ngx_http_request_t *r, ngx_str_t *path,
+    size_t *root_length, size_t reserved)
+{
+    return ngx_http_map_uri_to_path_real(r, path, root_length, reserved, is_orbit_context());
+}
+
+/* u_char *
+ngx_http_map_uri_to_path_orbit(ngx_http_request_t *r, ngx_str_t *path,
+    size_t *root_length, size_t reserved)
+{
+    return ngx_http_map_uri_to_path_real(r, path, root_length, reserved, 1);
+} */
 
 ngx_int_t
 ngx_http_auth_basic_user(ngx_http_request_t *r)
@@ -3459,7 +3480,7 @@ ngx_http_core_create_loc_conf(ngx_conf_t *cf)
 {
     ngx_http_core_loc_conf_t  *clcf;
 
-    clcf = ngx_pcalloc(cf->pool, sizeof(ngx_http_core_loc_conf_t));
+    clcf = orbit_calloc(cf->oballoc, sizeof(ngx_http_core_loc_conf_t));
     if (clcf == NULL) {
         return NULL;
     }

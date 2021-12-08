@@ -53,7 +53,7 @@ ngx_http_read_client_request_body(ngx_http_request_t *r,
         goto done;
     }
 
-    rb = ngx_pcalloc(r->pool, sizeof(ngx_http_request_body_t));
+    rb = orbit_calloc(r->oballoc, sizeof(ngx_http_request_body_t));
     if (rb == NULL) {
         rc = NGX_HTTP_INTERNAL_SERVER_ERROR;
         goto done;
@@ -499,7 +499,8 @@ ngx_http_write_request_body(ngx_http_request_t *r)
                    "http write client request body, bufs %p", rb->bufs);
 
     if (rb->temp_file == NULL) {
-        tf = ngx_pcalloc(r->pool, sizeof(ngx_temp_file_t));
+        /* TODO: two more alloc in upstream.c */
+        tf = orbit_calloc(r->oballoc, sizeof(ngx_temp_file_t));
         if (tf == NULL) {
             return NGX_ERROR;
         }
@@ -524,7 +525,7 @@ ngx_http_write_request_body(ngx_http_request_t *r)
         if (rb->bufs == NULL) {
             /* empty body with r->request_body_in_file_only */
 
-            if (ngx_create_temp_file(&tf->file, tf->path, tf->pool,
+            if (ngx_create_temp_file_orbit(&tf->file, tf->path, tf->pool, r->oballoc,
                                      tf->persistent, tf->clean, tf->access)
                 != NGX_OK)
             {
@@ -539,7 +540,7 @@ ngx_http_write_request_body(ngx_http_request_t *r)
         return NGX_OK;
     }
 
-    n = ngx_write_chain_to_temp_file(rb->temp_file, rb->bufs);
+    n = ngx_write_chain_to_temp_file_orbit(rb->temp_file, rb->bufs, r->oballoc);
 
     /* TODO: n == 0 or not complete and level event */
 
@@ -789,7 +790,7 @@ ngx_http_discard_request_body_filter(ngx_http_request_t *r, ngx_buf_t *b)
 
         if (rb == NULL) {
 
-            rb = ngx_pcalloc(r->pool, sizeof(ngx_http_request_body_t));
+            rb = orbit_calloc(r->oballoc, sizeof(ngx_http_request_body_t));
             if (rb == NULL) {
                 return NGX_HTTP_INTERNAL_SERVER_ERROR;
             }

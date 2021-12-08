@@ -535,6 +535,74 @@ ngx_http_create_request(ngx_connection_t *c)
     return r;
 }
 
+#define OBPOOLS 16
+extern struct orbit_allocator *oballoc;
+static struct orbit_pool *obpools[OBPOOLS];
+static bool used[OBPOOLS];
+//static int obpools_cursor = 0;
+static pthread_spinlock_t oblock;
+static int inited = 0;
+
+static void dump_used(void) {
+        int i;
+        return;
+        fprintf(stderr, "used: ");
+        for (i = 0; i < OBPOOLS; ++i) {
+                fprintf(stderr, "%d ", used[i]);
+        }
+        fprintf(stderr, "\n");
+}
+
+/* TODO: create pool dynamically? */
+struct orbit_allocator *get_oballoc(void)
+{
+        int i;
+        struct orbit_allocator *alloc;
+
+        if (!inited) {
+                inited = 1;
+                pthread_spin_init(&oblock, PTHREAD_PROCESS_PRIVATE);
+                for (i = 0; i < OBPOOLS; ++i)
+                        obpools[i] = orbit_pool_create(NULL, 1024 * 1024);
+                struct orbit_pool *scratchpool = orbit_pool_create(NULL, 1024 * 1024);
+		orbit_scratch_set_pool(scratchpool);
+        }
+        pthread_spin_lock(&oblock);
+        dump_used();
+        for (i = 0; i < OBPOOLS; ++i)
+                if (!used[i]) break;
+        dump_used();
+        if (i == OBPOOLS) {
+                fprintf(stderr, "orbit: all pool used!\n");
+                abort();
+        }
+        alloc = orbit_allocator_from_pool(obpools[i], false);
+        used[i] = true;
+        //if (obpools_cursor == 16) { obpools_cursor = 0; fprintf(stderr, "orbit: obpool cursor back\n"); };
+        pthread_spin_unlock(&oblock);
+        return alloc;
+}
+
+void oballoc_cleanup(void *alloc_)
+{
+    int i;
+    struct orbit_allocator *alloc = *(struct orbit_allocator**)alloc_;
+    //fprintf(stderr, "orbit: before oballoc cleanup\n");
+    pthread_spin_lock(&oblock);
+    dump_used();
+    *alloc->allocated = 0;
+    for (i = 0; i < OBPOOLS; ++i)
+        if (&obpools[i]->used == alloc->allocated) {
+                used[i] = false;
+                break;
+        }
+    dump_used();
+    if (i == OBPOOLS) {
+        fprintf(stderr, "orbit: pool not found!\n");
+    }
+    orbit_allocator_destroy(alloc);
+    pthread_spin_unlock(&oblock);
+}
 
 static ngx_http_request_t *
 ngx_http_alloc_request(ngx_connection_t *c)
@@ -545,6 +613,8 @@ ngx_http_alloc_request(ngx_connection_t *c)
     ngx_http_connection_t      *hc;
     ngx_http_core_srv_conf_t   *cscf;
     ngx_http_core_main_conf_t  *cmcf;
+    struct orbit_allocator     *oballoc;
+    ngx_pool_cleanup_t         *cln;
 
     hc = c->data;
 
@@ -554,14 +624,21 @@ ngx_http_alloc_request(ngx_connection_t *c)
     if (pool == NULL) {
         return NULL;
     }
+    oballoc = get_oballoc();
+    if (oballoc == NULL)
+        goto fail;
+    cln = ngx_pool_cleanup_add(pool, sizeof(oballoc));
+    if (cln == NULL)
+        goto fail;
+    cln->handler = oballoc_cleanup;
+    *(struct orbit_allocator**)cln->data = oballoc;
 
-    r = ngx_pcalloc(pool, sizeof(ngx_http_request_t));
-    if (r == NULL) {
-        ngx_destroy_pool(pool);
-        return NULL;
-    }
+    r = orbit_calloc(oballoc, sizeof(ngx_http_request_t));
+    if (r == NULL)
+        goto fail;
 
     r->pool = pool;
+    r->oballoc = oballoc;
 
     r->http_connection = hc;
     r->signature = NGX_HTTP_MODULE;
@@ -578,33 +655,23 @@ ngx_http_alloc_request(ngx_connection_t *c)
     if (ngx_list_init(&r->headers_out.headers, r->pool, 20,
                       sizeof(ngx_table_elt_t))
         != NGX_OK)
-    {
-        ngx_destroy_pool(r->pool);
-        return NULL;
-    }
+        goto fail;
 
     if (ngx_list_init(&r->headers_out.trailers, r->pool, 4,
                       sizeof(ngx_table_elt_t))
         != NGX_OK)
-    {
-        ngx_destroy_pool(r->pool);
-        return NULL;
-    }
+        goto fail;
 
     r->ctx = ngx_pcalloc(r->pool, sizeof(void *) * ngx_http_max_module);
-    if (r->ctx == NULL) {
-        ngx_destroy_pool(r->pool);
-        return NULL;
-    }
+    if (r->ctx == NULL)
+        goto fail;
 
     cmcf = ngx_http_get_module_main_conf(r, ngx_http_core_module);
 
     r->variables = ngx_pcalloc(r->pool, cmcf->variables.nelts
                                         * sizeof(ngx_http_variable_value_t));
-    if (r->variables == NULL) {
-        ngx_destroy_pool(r->pool);
-        return NULL;
-    }
+    if (r->variables == NULL)
+        goto fail;
 
 #if (NGX_HTTP_SSL)
     if (c->ssl) {
@@ -635,6 +702,10 @@ ngx_http_alloc_request(ngx_connection_t *c)
     r->log_handler = ngx_http_log_error_handler;
 
     return r;
+
+fail:
+    ngx_destroy_pool(pool);
+    return NULL;
 }
 
 

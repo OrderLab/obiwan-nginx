@@ -9,6 +9,8 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
+#include "orbit.h"
+#define obprintf(...) do { } while (0)
 
 #define NGX_HTTP_DAV_OFF             2
 
@@ -203,7 +205,7 @@ ngx_http_dav_handler(ngx_http_request_t *r)
 
 
 static void
-ngx_http_dav_put_handler(ngx_http_request_t *r)
+ngx_http_dav_put_handler_real(ngx_http_request_t *r)
 {
     size_t                    root;
     time_t                    date;
@@ -220,8 +222,9 @@ ngx_http_dav_put_handler(ngx_http_request_t *r)
 
     path.len--;
 
-    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                   "http put filename: \"%s\"", path.data);
+    /* ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "http put filename: \"%s\"", path.data); */
+    obprintf(stderr, "orbit: http put filename: \"%s\"\n", path.data);
 
     temp = &r->request_body->temp_file->file.name;
 
@@ -255,7 +258,8 @@ ngx_http_dav_put_handler(ngx_http_request_t *r)
     ext.delete_file = 1;
     ext.log = r->connection->log;
 
-    if (r->headers_in.date) {
+    /* TODO: not ported */
+    if (0 && r->headers_in.date) {
         date = ngx_parse_http_time(r->headers_in.date->value.data,
                                    r->headers_in.date->value.len);
 
@@ -271,6 +275,7 @@ ngx_http_dav_put_handler(ngx_http_request_t *r)
     }
 
     if (status == NGX_HTTP_CREATED) {
+        obprintf(stderr, "orbit: create success\n");
         if (ngx_http_dav_location(r) != NGX_OK) {
             ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
             return;
@@ -279,13 +284,101 @@ ngx_http_dav_put_handler(ngx_http_request_t *r)
         r->headers_out.content_length_n = 0;
     }
 
-    r->headers_out.status = status;
+    struct orbit_scratch scratch;
+
+    orbit_scratch_create(&scratch);
+
+    unsigned long ob_finalize(size_t argc, unsigned long argv[]);
+    unsigned long argv[] = { (unsigned long)r, (unsigned long)status };
+
+    orbit_scratch_push_operation(&scratch, ob_finalize, sizeof(argv)/sizeof(*argv), argv);
+
+    orbit_sendv(&scratch);
+    obprintf(stderr, "orbit: after scratch send\n");
+
+    /* r->headers_out.status = status;
     r->header_only = 1;
 
-    ngx_http_finalize_request(r, ngx_http_send_header(r));
+    ngx_http_finalize_request(r, ngx_http_send_header(r)); */
     return;
 }
 
+unsigned long ob_finalize(size_t argc, unsigned long argv[])
+{
+    ngx_http_request_t *r = (ngx_http_request_t *)argv[0];
+    ngx_uint_t status = (ngx_uint_t)argv[1];
+    r->headers_out.status = status;
+    r->header_only = 1;
+    ngx_http_finalize_request(r, ngx_http_send_header(r));
+    return 0;
+}
+
+static inline struct orbit_pool *to_pool(struct orbit_allocator *alloc)
+{
+    return (struct orbit_pool*)((char*)alloc->allocated
+                - offsetof(struct orbit_allocator, allocated));
+}
+
+static unsigned long
+ngx_http_dav_put_handler_orbit(void *store, void *argptr)
+{
+    ngx_http_dav_put_handler_real(*(ngx_http_request_t**)argptr);
+    return 0;
+}
+
+static void
+ngx_http_dav_put_handler(ngx_http_request_t *r)
+{
+    static bool last_error = false;
+    static struct orbit_module *ob = NULL;
+    int err;
+    long ret;
+    struct orbit_task task;
+    union orbit_result result;
+    /* static int count = 0; */
+
+    if (!ob || last_error)
+        ob = orbit_create("dav_put_handler", ngx_http_dav_put_handler_orbit, NULL);
+
+    struct orbit_pool *pools[] = { to_pool(r->oballoc), };
+    const size_t npool = sizeof(pools) / sizeof(pools[0]);
+    ret = orbit_call_async(ob, 0, npool, pools, NULL, &r, sizeof(r), &task);
+
+    /* if (++count % 1000 == 0)
+    	fprintf(stderr, "dav put count %d\n", count); */
+
+    if (ret < 0)
+        goto err;
+
+    obprintf(stderr, "orbit: orbit_call succeeded\n");
+
+    ret = orbit_recvv(&result, &task);
+    if (ret < 0)
+        goto err;
+    if (ret == 1) {
+        orbit_apply(&result.scratch, false);
+        ret = orbit_recvv(&result, &task);
+	if (ret < 0) {
+            err = errno;
+	    obprintf(stderr, "orbit: error after success? %d\n", err);
+            last_error = false;
+	}
+    } else if (ret == 0) {
+        err = errno;
+	obprintf(stderr, "orbit: no scratch apply? %d\n", err);
+        last_error = false;
+    }
+    (void)err;
+    return;
+
+err:
+    err = errno;
+    (void)err;
+    obprintf(stderr, "orbit: orbit_call failed with errno: %s\n", strerror(err));
+    last_error = true;
+    ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
+    sleep(1);
+}
 
 static ngx_int_t
 ngx_http_dav_delete_handler(ngx_http_request_t *r)

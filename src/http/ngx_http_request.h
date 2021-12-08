@@ -4,6 +4,7 @@
  * Copyright (C) Nginx, Inc.
  */
 
+#include <orbit.h>
 
 #ifndef _NGX_HTTP_REQUEST_H_INCLUDED_
 #define _NGX_HTTP_REQUEST_H_INCLUDED_
@@ -391,6 +392,7 @@ struct ngx_http_request_s {
                                          /* of ngx_http_upstream_state_t */
 
     ngx_pool_t                       *pool;
+    struct orbit_allocator           *oballoc;
     ngx_buf_t                        *header_in;
 
     ngx_http_headers_in_t             headers_in;

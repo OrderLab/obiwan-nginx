@@ -8,6 +8,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_event.h>
+#include <orbit.h>
 
 
 static void ngx_destroy_cycle_pools(ngx_conf_t *conf);
@@ -34,6 +35,8 @@ ngx_uint_t             ngx_quiet_mode;
 static ngx_connection_t  dumb;
 /* STUB */
 
+struct orbit_allocator *get_oballoc(void);
+void oballoc_cleanup(void *allocptr);
 
 ngx_cycle_t *
 ngx_init_cycle(ngx_cycle_t *old_cycle)
@@ -45,6 +48,8 @@ ngx_init_cycle(ngx_cycle_t *old_cycle)
     ngx_time_t          *tp;
     ngx_conf_t           conf;
     ngx_pool_t          *pool;
+    struct orbit_allocator *oballoc;
+    ngx_pool_cleanup_t         *cln;
     ngx_cycle_t         *cycle, **old;
     ngx_shm_zone_t      *shm_zone, *oshm_zone;
     ngx_list_part_t     *part, *opart;
@@ -71,6 +76,20 @@ ngx_init_cycle(ngx_cycle_t *old_cycle)
         return NULL;
     }
     pool->log = log;
+
+    /* TODO: move config into this pool */
+    oballoc = get_oballoc();
+    if (oballoc == NULL) {
+        ngx_destroy_pool(pool);
+        return NULL;
+    }
+    cln = ngx_pool_cleanup_add(pool, sizeof(oballoc));
+    if (cln == NULL) {
+        ngx_destroy_pool(pool);
+        return NULL;
+    }
+    cln->handler = oballoc_cleanup;
+    *(struct orbit_allocator**)cln->data = oballoc;
 
     cycle = ngx_pcalloc(pool, sizeof(ngx_cycle_t));
     if (cycle == NULL) {
@@ -267,6 +286,7 @@ ngx_init_cycle(ngx_cycle_t *old_cycle)
     conf.ctx = cycle->conf_ctx;
     conf.cycle = cycle;
     conf.pool = pool;
+    conf.oballoc = oballoc;
     conf.log = log;
     conf.module_type = NGX_CORE_MODULE;
     conf.cmd_type = NGX_MAIN_CONF;

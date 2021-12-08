@@ -309,17 +309,18 @@ ngx_pcalloc(ngx_pool_t *pool, size_t size)
 
 
 ngx_pool_cleanup_t *
-ngx_pool_cleanup_add(ngx_pool_t *p, size_t size)
+ngx_pool_cleanup_add_real(ngx_pool_t *p, struct orbit_allocator *oballoc, size_t size)
 {
     ngx_pool_cleanup_t  *c;
 
-    c = ngx_palloc(p, sizeof(ngx_pool_cleanup_t));
+    c = oballoc ? orbit_alloc(oballoc, sizeof(ngx_pool_cleanup_t))
+                : ngx_palloc(p, sizeof(ngx_pool_cleanup_t));
     if (c == NULL) {
         return NULL;
     }
 
     if (size) {
-        c->data = ngx_palloc(p, size);
+        c->data = oballoc ? orbit_alloc(oballoc, size) : ngx_palloc(p, size);
         if (c->data == NULL) {
             return NULL;
         }
@@ -338,6 +339,18 @@ ngx_pool_cleanup_add(ngx_pool_t *p, size_t size)
     return c;
 }
 
+ngx_pool_cleanup_t *
+ngx_pool_cleanup_add(ngx_pool_t *p, size_t size)
+{
+    return ngx_pool_cleanup_add_real(p, NULL, size);
+}
+
+/* TODO: This is actually not needed? */
+ngx_pool_cleanup_t *
+ngx_pool_cleanup_add_orbit(ngx_pool_t *p, struct orbit_allocator *oballoc, size_t size)
+{
+    return ngx_pool_cleanup_add_real(p, oballoc, size);
+}
 
 void
 ngx_pool_run_cleanup_file(ngx_pool_t *p, ngx_fd_t fd)

@@ -11,6 +11,7 @@
 
 #include <ngx_config.h>
 #include <ngx_core.h>
+#include <orbit.h>
 
 
 /*
@@ -119,6 +120,7 @@ struct ngx_conf_s {
 
     ngx_cycle_t          *cycle;
     ngx_pool_t           *pool;
+    struct orbit_allocator *oballoc;
     ngx_pool_t           *temp_pool;
     ngx_conf_file_t      *conf_file;
     ngx_log_t            *log;

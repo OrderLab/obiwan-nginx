@@ -17,8 +17,9 @@ ngx_atomic_t         *ngx_temp_number = &temp_number;
 ngx_atomic_int_t      ngx_random_number = 123456;
 
 
-ngx_int_t
-ngx_get_full_name(ngx_pool_t *pool, ngx_str_t *prefix, ngx_str_t *name)
+static ngx_int_t
+ngx_get_full_name_real(ngx_pool_t *pool, struct orbit_allocator *oballoc,
+    ngx_str_t *prefix, ngx_str_t *name)
 {
     size_t      len;
     u_char     *p, *n;
@@ -40,7 +41,8 @@ ngx_get_full_name(ngx_pool_t *pool, ngx_str_t *prefix, ngx_str_t *name)
 
 #endif
 
-    n = ngx_pnalloc(pool, len + name->len + 1);
+    n = pool ? ngx_pnalloc(pool, len + name->len + 1)
+             : orbit_alloc(oballoc, len + name->len + 1);
     if (n == NULL) {
         return NGX_ERROR;
     }
@@ -54,6 +56,17 @@ ngx_get_full_name(ngx_pool_t *pool, ngx_str_t *prefix, ngx_str_t *name)
     return NGX_OK;
 }
 
+ngx_int_t
+ngx_get_full_name(ngx_pool_t *pool, ngx_str_t *prefix, ngx_str_t *name)
+{
+    return ngx_get_full_name_real(pool, NULL, prefix, name);
+}
+
+ngx_int_t
+ngx_get_full_name_orbit(struct orbit_allocator *oballoc, ngx_str_t *prefix, ngx_str_t *name)
+{
+    return ngx_get_full_name_real(NULL, oballoc, prefix, name);
+}
 
 static ngx_int_t
 ngx_test_full_name(ngx_str_t *name)
@@ -105,13 +118,14 @@ ngx_test_full_name(ngx_str_t *name)
 }
 
 
-ssize_t
-ngx_write_chain_to_temp_file(ngx_temp_file_t *tf, ngx_chain_t *chain)
+static ssize_t
+ngx_write_chain_to_temp_file_real(ngx_temp_file_t *tf, ngx_chain_t *chain,
+    struct orbit_allocator *oballoc)
 {
     ngx_int_t  rc;
 
     if (tf->file.fd == NGX_INVALID_FILE) {
-        rc = ngx_create_temp_file(&tf->file, tf->path, tf->pool,
+        rc = ngx_create_temp_file_orbit(&tf->file, tf->path, tf->pool, oballoc,
                                   tf->persistent, tf->clean, tf->access);
 
         if (rc != NGX_OK) {
@@ -136,9 +150,22 @@ ngx_write_chain_to_temp_file(ngx_temp_file_t *tf, ngx_chain_t *chain)
     return ngx_write_chain_to_file(&tf->file, chain, tf->offset, tf->pool);
 }
 
+ssize_t
+ngx_write_chain_to_temp_file(ngx_temp_file_t *tf, ngx_chain_t *chain)
+{
+    return ngx_write_chain_to_temp_file_real(tf, chain, NULL);
+}
 
-ngx_int_t
-ngx_create_temp_file(ngx_file_t *file, ngx_path_t *path, ngx_pool_t *pool,
+ssize_t
+ngx_write_chain_to_temp_file_orbit(ngx_temp_file_t *tf, ngx_chain_t *chain,
+    struct orbit_allocator *oballoc)
+{
+    return ngx_write_chain_to_temp_file_real(tf, chain, oballoc);
+}
+
+static ngx_int_t
+ngx_create_temp_file_real(ngx_file_t *file, ngx_path_t *path, ngx_pool_t *pool,
+    struct orbit_allocator *oballoc,
     ngx_uint_t persistent, ngx_uint_t clean, ngx_uint_t access)
 {
     size_t                    levels;
@@ -163,7 +190,10 @@ ngx_create_temp_file(ngx_file_t *file, ngx_path_t *path, ngx_pool_t *pool,
 
     file->name.len = name.len + 1 + levels + 10;
 
-    file->name.data = ngx_pnalloc(pool, file->name.len + 1);
+    //fprintf(stderr, "temp file create oballoc=%p\n", oballoc);
+    file->name.data = oballoc ? orbit_alloc(oballoc, file->name.len + 1)
+                              : ngx_pnalloc(pool, file->name.len + 1);
+    //fprintf(stderr, "temp file create file->name.data=%p\n", file->name.data);
     if (file->name.data == NULL) {
         return NGX_ERROR;
     }
@@ -236,6 +266,20 @@ ngx_create_temp_file(ngx_file_t *file, ngx_path_t *path, ngx_pool_t *pool,
     }
 }
 
+ngx_int_t
+ngx_create_temp_file(ngx_file_t *file, ngx_path_t *path, ngx_pool_t *pool,
+    ngx_uint_t persistent, ngx_uint_t clean, ngx_uint_t access)
+{
+    return ngx_create_temp_file_real(file, path, pool, NULL, persistent, clean, access);
+}
+
+ngx_int_t
+ngx_create_temp_file_orbit(ngx_file_t *file, ngx_path_t *path, ngx_pool_t *pool,
+    struct orbit_allocator *oballoc,
+    ngx_uint_t persistent, ngx_uint_t clean, ngx_uint_t access)
+{
+    return ngx_create_temp_file_real(file, path, pool, oballoc, persistent, clean, access);
+}
 
 void
 ngx_create_hashed_filename(ngx_path_t *path, u_char *file, size_t len)
