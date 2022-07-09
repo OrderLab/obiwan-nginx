@@ -326,6 +326,17 @@ ngx_http_dav_put_handler_orbit(void *store, void *argptr)
     return 0;
 }
 
+struct orbit_pool obpool_data;
+struct orbit_allocator *oballoc, oballoc_data;
+
+static void *dav_orbit_init(void)
+{
+    orbit_pool_create_in(&obpool_data, NULL, 0x40000000UL);
+    orbit_allocator_from_pool_in(&oballoc_data, &obpool_data, true);
+    oballoc = &oballoc_data;
+    return NULL;
+}
+
 static void
 ngx_http_dav_put_handler(ngx_http_request_t *r)
 {
@@ -338,7 +349,7 @@ ngx_http_dav_put_handler(ngx_http_request_t *r)
     /* static int count = 0; */
 
     if (!ob || last_error)
-        ob = orbit_create("dav_put_handler", ngx_http_dav_put_handler_orbit, NULL);
+        ob = orbit_create("dav_put_handler", ngx_http_dav_put_handler_orbit, dav_orbit_init);
 
     struct orbit_pool *pools[] = { to_pool(r->oballoc), };
     const size_t npool = sizeof(pools) / sizeof(pools[0]);
@@ -353,11 +364,13 @@ ngx_http_dav_put_handler(ngx_http_request_t *r)
     obprintf(stderr, "orbit: orbit_call succeeded\n");
 
     ret = orbit_recvv(&result, &task);
+    fprintf(stderr, "orbit_recv1 %ld cnt=%lu\n", ret, result.scratch.count);
     if (ret < 0)
         goto err;
     if (ret == 1) {
         orbit_apply(&result.scratch, false);
         ret = orbit_recvv(&result, &task);
+        fprintf(stderr, "orbit_recv2 %ld retval=%ld\n", ret, result.retval);
 	if (ret < 0) {
             err = errno;
 	    obprintf(stderr, "orbit: error after success? %d\n", err);

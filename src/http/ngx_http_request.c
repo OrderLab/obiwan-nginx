@@ -553,6 +553,8 @@ static void dump_used(void) {
         fprintf(stderr, "\n");
 }
 
+static struct orbit_pool scratch_pool;
+
 /* TODO: create pool dynamically? */
 struct orbit_allocator *get_oballoc(void)
 {
@@ -564,8 +566,8 @@ struct orbit_allocator *get_oballoc(void)
                 pthread_spin_init(&oblock, PTHREAD_PROCESS_PRIVATE);
                 for (i = 0; i < OBPOOLS; ++i)
                         obpools[i] = orbit_pool_create(NULL, 1024 * 1024);
-                struct orbit_pool *scratchpool = orbit_pool_create(NULL, 1024 * 1024);
-		orbit_scratch_set_pool(scratchpool);
+                orbit_pool_create_in(&scratch_pool, NULL, 1024 * 1024);
+                orbit_scratch_set_pool(&scratch_pool);
         }
         pthread_spin_lock(&oblock);
         dump_used();
@@ -1311,7 +1313,8 @@ ngx_http_process_request_uri(ngx_http_request_t *r)
             r->uri.len++;
         }
 
-        r->uri.data = ngx_pnalloc(r->pool, r->uri.len);
+        // r->uri.data = ngx_pnalloc(r->pool, r->uri.len);
+        r->uri.data = orbit_alloc(r->oballoc, r->uri.len);
         if (r->uri.data == NULL) {
             ngx_http_close_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
             return NGX_ERROR;
@@ -1329,7 +1332,9 @@ ngx_http_process_request_uri(ngx_http_request_t *r)
         }
 
     } else {
-        r->uri.data = r->uri_start;
+        // r->uri.data = r->uri_start;
+        r->uri.data = orbit_alloc(r->oballoc, r->uri.len);
+        ngx_memcpy(r->uri.data, r->uri_start, r->uri.len);
     }
 
     r->unparsed_uri.len = r->uri_end - r->uri_start;

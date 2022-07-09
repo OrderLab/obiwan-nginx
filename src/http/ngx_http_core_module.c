@@ -1871,6 +1871,7 @@ ngx_http_output_filter(ngx_http_request_t *r, ngx_chain_t *in)
     return rc;
 }
 
+extern struct orbit_allocator *oballoc;
 
 static u_char *
 ngx_http_map_uri_to_path_real(ngx_http_request_t *r, ngx_str_t *path,
@@ -1898,8 +1899,7 @@ ngx_http_map_uri_to_path_real(ngx_http_request_t *r, ngx_str_t *path,
 
         path->len = clcf->root.len + reserved + r->uri.len - alias + 1;
 
-        //path->data = orbit ? orbit_alloc(r->oballoc, path->len)
-        path->data = orbit ? calloc(path->len, 1)
+        path->data = orbit ? orbit_calloc(oballoc, path->len)
                            : ngx_pnalloc(r->pool, path->len);
         if (path->data == NULL) {
             return NULL;
@@ -2849,14 +2849,16 @@ ngx_http_core_server(ngx_conf_t *cf, ngx_command_t *cmd, void *dummy)
 
     /* the server{}'s srv_conf */
 
-    ctx->srv_conf = ngx_pcalloc(cf->pool, sizeof(void *) * ngx_http_max_module);
+    ctx->srv_conf = orbit_calloc(cf->oballoc, sizeof(void *) * ngx_http_max_module);
+    // ctx->srv_conf = ngx_pcalloc(cf->pool, sizeof(void *) * ngx_http_max_module);
     if (ctx->srv_conf == NULL) {
         return NGX_CONF_ERROR;
     }
 
     /* the server{}'s loc_conf */
 
-    ctx->loc_conf = ngx_pcalloc(cf->pool, sizeof(void *) * ngx_http_max_module);
+    ctx->loc_conf = orbit_calloc(cf->oballoc, sizeof(void *) * ngx_http_max_module);
+    // ctx->loc_conf = ngx_pcalloc(cf->pool, sizeof(void *) * ngx_http_max_module);
     if (ctx->loc_conf == NULL) {
         return NGX_CONF_ERROR;
     }
@@ -2989,7 +2991,8 @@ ngx_http_core_location(ngx_conf_t *cf, ngx_command_t *cmd, void *dummy)
     ctx->main_conf = pctx->main_conf;
     ctx->srv_conf = pctx->srv_conf;
 
-    ctx->loc_conf = ngx_pcalloc(cf->pool, sizeof(void *) * ngx_http_max_module);
+    ctx->loc_conf = orbit_calloc(cf->oballoc, sizeof(void *) * ngx_http_max_module);
+    // ctx->loc_conf = ngx_pcalloc(cf->pool, sizeof(void *) * ngx_http_max_module);
     if (ctx->loc_conf == NULL) {
         return NGX_CONF_ERROR;
     }
@@ -4392,7 +4395,12 @@ ngx_http_core_root(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     }
 
     clcf->alias = alias ? clcf->name.len : 0;
-    clcf->root = value[1];
+
+    //clcf->root = value[1];
+    clcf->root.len = value[1].len;
+    // TODO: return value check
+    clcf->root.data = orbit_alloc(cf->oballoc, clcf->root.len);
+    ngx_memcpy(clcf->root.data, value[1].data, clcf->root.len);
 
     if (!alias && clcf->root.len > 0
         && clcf->root.data[clcf->root.len - 1] == '/')
@@ -4401,7 +4409,7 @@ ngx_http_core_root(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     }
 
     if (clcf->root.data[0] != '$') {
-        if (ngx_conf_full_name(cf->cycle, &clcf->root, 0) != NGX_OK) {
+        if (ngx_conf_full_name_orbit(cf, cf->cycle, &clcf->root, 0) != NGX_OK) {
             return NGX_CONF_ERROR;
         }
     }
